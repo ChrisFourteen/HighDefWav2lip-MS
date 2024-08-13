@@ -324,7 +324,6 @@ def train(device, model, disc, train_data_loader, test_data_loader, optimizer, d
                     running_disc_real_loss / (step + 1)))
         global_epoch += 1
 
-
 def eval_model(test_data_loader, global_step, device, model, disc):
     print('Evaluating')
     running_sync_loss, running_l1_loss, running_l2_loss, running_disc_real_loss, running_disc_fake_loss, running_perceptual_loss, running_ssim_loss = [], [], [], [], [], [], []
