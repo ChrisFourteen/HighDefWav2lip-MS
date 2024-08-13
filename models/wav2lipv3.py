@@ -337,3 +337,65 @@ class Wav2Lip_disc_qual(nn.Module):
             x = f(x)
 
         return self.binary_pred(x).view(len(x), -1)
+
+class SSIMLoss(nn.Module):
+    def __init__(self, window_size=11, size_average=True):
+        super(SSIMLoss, self).__init__()
+        self.window_size = window_size
+        self.size_average = size_average
+        self.channel = 3  # Assuming RGB images
+        self.window = self.create_window(window_size, self.channel)
+
+    def create_window(self, window_size, channel):
+        def gauss(window_size, sigma):
+            x = torch.arange(window_size, dtype=torch.float32)
+            gauss = torch.exp(-(x - window_size // 2) ** 2 / (2 * sigma ** 2))
+            return gauss / gauss.sum()
+
+        _1D_window = gauss(window_size, 1.5)
+        _1D_window = _1D_window.unsqueeze(0)  # Ensure it's a row vector
+        _2D_window = _1D_window.t().mm(_1D_window).float()  # Matrix multiplication to get 2D Gaussian window
+        window = _2D_window.unsqueeze(0).unsqueeze(0).expand(channel, 1, window_size, window_size).contiguous()
+        return window
+
+    def _ssim(self, img1, img2, window, window_size, channel, size_average=True):
+        mu1 = F.conv2d(img1, window, padding=window_size // 2, groups=channel)
+        mu2 = F.conv2d(img2, window, padding=window_size // 2, groups=channel)
+
+        mu1_sq = mu1.pow(2)
+        mu2_sq = mu2.pow(2)
+        mu1_mu2 = mu1 * mu2
+
+        sigma1_sq = F.conv2d(img1 * img1, window, padding=window_size // 2, groups=channel) - mu1_sq
+        sigma2_sq = F.conv2d(img2 * img2, window, padding=window_size // 2, groups=channel) - mu2_sq
+        sigma12 = F.conv2d(img1 * img2, window, padding=window_size // 2, groups=channel) - mu1_mu2
+
+        C1 = 0.01 ** 2
+        C2 = 0.03 ** 2
+
+        ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+
+        if size_average:
+            return ssim_map.mean()
+        else:
+            return ssim_map.mean(1).mean(1).mean(1)
+
+    def forward(self, img1, img2):
+        # Ensure img1 and img2 have the correct shape: (batch_size, channels, frames, height, width)
+        if len(img1.size()) == 5 and img1.size(1) == self.channel:
+            batch_size, channels, frames, height, width = img1.size()
+        else:
+            raise ValueError("Expected input with 5 dimensions (batch_size, channels, frames, height, width)")
+
+        ssim_scores = []
+        for frame in range(frames):
+            frame_img1 = img1[:, :, frame, :, :]
+            frame_img2 = img2[:, :, frame, :, :]
+            window = self.create_window(self.window_size, self.channel).type_as(frame_img1)
+
+            ssim_score = self._ssim(frame_img1, frame_img2, window, self.window_size, self.channel, self.size_average)
+            ssim_scores.append(ssim_score)
+
+        # Average SSIM scores across frames
+        return 1 - torch.mean(torch.stack(ssim_scores))
+
